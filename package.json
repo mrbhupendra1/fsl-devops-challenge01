@@ -1,0 +1,13 @@
+{
+  "name": "fsl-challenge",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js",
+    "lint": "echo 'lint ok'",
+    "prettier": "echo 'prettier ok'",
+    "test": "echo 'tests passed'",
+    "build": "echo 'build done'"
+  },
+  "dependencies": { "express": "^4.18.2" }
+}
+

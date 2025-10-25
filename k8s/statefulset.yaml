@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fsl-app
+  namespace: production
+spec:
+  serviceName: "fsl-app-svc"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: fsl-app
+  template:
+    metadata:
+      labels:
+        app: fsl-app
+    spec:
+      containers:
+      - name: app
+        image: 627129177687.dkr.ecr.us-east-1.amazonaws.com/raja-fsl-app:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MY_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: my-secret
+              key: MY_SECRET
+
