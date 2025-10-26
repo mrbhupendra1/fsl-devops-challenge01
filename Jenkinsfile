@@ -2,11 +2,11 @@ pipeline {
     agent any
 
     environment {
-        AWS_ACCOUNT_ID = '627129177687'
-        AWS_REGION = 'us-east-1'
-        ECR_REPO_NAME = 'raja-fsl-app'
-        IMAGE_TAG = 'latest'
-        K8S_NAMESPACE = 'production'
+        AWS_ACCOUNT_ID = "627129177687"
+        AWS_REGION = "us-east-1"
+        ECR_REPO_NAME = "raja-fsl-app"
+        IMAGE_TAG = "latest"
+        K8S_NAMESPACE = "production"
     }
 
     stages {
@@ -21,6 +21,24 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh 'npm install'
+            }
+        }
+
+        stage('Lint Code') {
+            steps {
+                sh 'npm run lint || true'
+            }
+        }
+
+        stage('Format Code') {
+            steps {
+                sh 'npm run prettier -- --write || true'
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh 'CI=true npm run test || true'
             }
         }
 
@@ -51,30 +69,32 @@ pipeline {
 
         stage('Push Docker Image to ECR') {
             steps {
-                script {
-                    sh "docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}"
-                }
+                sh "docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}"
             }
         }
 
         stage('Deploy to Kubernetes (EKS)') {
             steps {
                 script {
-                    sh """
-                    kubectl set image deployment/fsl-app-deployment fsl-app-container=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG} -n ${K8S_NAMESPACE} || true
-                    kubectl rollout restart deployment/fsl-app-deployment -n ${K8S_NAMESPACE}
-                    """
+                    try {
+                        sh """
+                        echo "🔹 Applying StatefulSet configuration..."
+                        kubectl apply -f k8s/statefulset.yaml -n ${K8S_NAMESPACE}
+
+                        echo "🔹 Updating StatefulSet image..."
+                        kubectl set image statefulset/fsl-app app=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG} -n ${K8S_NAMESPACE}
+
+                        echo "🔹 Restarting StatefulSet..."
+                        kubectl rollout restart statefulset/fsl-app -n ${K8S_NAMESPACE}
+
+                        echo "✅ Deployment successful!"
+                        """
+                    } catch (err) {
+                        echo "❌ Deployment failed! Check logs."
+                        error("Deployment failed.")
+                    }
                 }
             }
-        }
-    }
-
-    post {
-        success {
-            echo '✅ Deployment successful!'
-        }
-        failure {
-            echo '❌ Deployment failed! Check logs.'
         }
     }
 }
