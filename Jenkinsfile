@@ -2,11 +2,11 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "us-east-1"
-        AWS_ACCOUNT_ID = "627129177687"
-        ECR_REPO_NAME = "fsl-app"
-        ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
-        KUBE_NAMESPACE = "production"
+        AWS_ACCOUNT_ID = '627129177687'
+        AWS_REGION = 'us-east-1'
+        ECR_REPO_NAME = 'raja-fsl-app'
+        IMAGE_TAG = 'latest'
+        K8S_NAMESPACE = 'production'
     }
 
     stages {
@@ -26,14 +26,14 @@ pipeline {
 
         stage('Build Application') {
             steps {
-                sh 'npm run build || echo "No build script, skipping..."'
+                sh 'npm run build'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    dockerImage = docker.build("${ECR_URL}:latest")
+                    dockerImage = docker.build("${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}")
                 }
             }
         }
@@ -41,10 +41,10 @@ pipeline {
         stage('Login to AWS ECR') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
-                    sh '''
-                        aws ecr get-login-password --region ${AWS_REGION} | \
-                        docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                    '''
+                    sh """
+                    aws ecr get-login-password --region ${AWS_REGION} | \
+                    docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                    """
                 }
             }
         }
@@ -52,21 +52,18 @@ pipeline {
         stage('Push Docker Image to ECR') {
             steps {
                 script {
-                    sh '''
-                        docker push ${ECR_URL}:latest
-                    '''
+                    sh "docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}"
                 }
             }
         }
 
         stage('Deploy to Kubernetes (EKS)') {
             steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
-                    sh '''
-                        kubectl set image statefulset/fsl-app \
-                        fsl-app=${ECR_URL}:latest \
-                        -n ${KUBE_NAMESPACE}
-                    '''
+                script {
+                    sh """
+                    kubectl set image deployment/fsl-app-deployment fsl-app-container=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG} -n ${K8S_NAMESPACE} || true
+                    kubectl rollout restart deployment/fsl-app-deployment -n ${K8S_NAMESPACE}
+                    """
                 }
             }
         }
@@ -81,4 +78,3 @@ pipeline {
         }
     }
 }
-
