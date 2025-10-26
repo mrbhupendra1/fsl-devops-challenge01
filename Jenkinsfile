@@ -2,76 +2,84 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = 'us-east-1'
-        AWS_ACCOUNT_ID = '627129177687'
-        IMAGE_NAME = 'raja-fsl-app'
-        ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        REGISTRY = "mrbhupendra1"
+        IMAGE_NAME = "fsl-app"
+        DOCKER_IMAGE = "${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}"
+        KUBE_NAMESPACE = "production"
     }
 
     stages {
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
-                git branch: 'main', credentialsId: 'github-creds', url: 'https://github.com/mrbhupendra1/fsl-devops-challenge01.git'
+                echo "🔄 Checking out repository..."
+                checkout scm
             }
         }
 
-        stage('Install & Test') {
+        stage('Build & Test') {
             agent {
                 docker {
                     image 'node:18-alpine'
-                    args '-v /var/run/docker.sock:/var/run/docker.sock'
+                    args '-u root:root'  // ensure full permissions
                 }
             }
             steps {
                 sh '''
+                    echo "📦 Setting up writable npm cache..."
+                    mkdir -p /tmp/.npm
+                    npm config set cache /tmp/.npm --global
+
                     echo "📦 Installing npm dependencies..."
                     npm install
+
                     echo "🧹 Running ESLint..."
                     npm run lint || true
+
                     echo "🎨 Running Prettier..."
                     npm run prettier --write || true
+
                     echo "🧪 Running Tests..."
                     CI=true npm test || true
                 '''
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Docker Build & Push') {
             steps {
-                sh 'docker build -t ${ECR_URL}/${IMAGE_NAME}:latest .'
-            }
-        }
+                script {
+                    echo "🐳 Building Docker image..."
+                    sh "docker build -t ${DOCKER_IMAGE} ."
 
-        stage('Login to AWS ECR') {
-            steps {
-                withCredentials([[ $class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials' ]]) {
-                    sh '''
-                        echo "Logging into AWS ECR..."
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URL}
-                    '''
+                    echo "🔐 Logging in to DockerHub..."
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                        sh 'echo $PASSWORD | docker login -u $USERNAME --password-stdin'
+                    }
+
+                    echo "📤 Pushing Docker image..."
+                    sh "docker push ${DOCKER_IMAGE}"
                 }
             }
         }
 
-        stage('Push Image to ECR') {
+        stage('Deploy to Kubernetes') {
             steps {
-                sh 'docker push ${ECR_URL}/${IMAGE_NAME}:latest'
-            }
-        }
-
-        stage('Deploy to EKS Cluster') {
-            steps {
-                echo "✅ Deployment to EKS will go here (optional)"
+                script {
+                    echo "🚀 Deploying to Kubernetes..."
+                    sh '''
+                        kubectl set image statefulset/fsl-app fsl-app=${DOCKER_IMAGE} -n production
+                        kubectl rollout status statefulset/fsl-app -n production
+                    '''
+                }
             }
         }
     }
 
     post {
         success {
-            echo '✅ Build and Push Successful!'
+            echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo '❌ Build or Deployment failed!'
+            echo "❌ Pipeline failed. Check logs for details."
         }
     }
 }
