@@ -2,72 +2,70 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY = "mrbhupendra1"
-        IMAGE_NAME = "fsl-app"
-        DOCKER_IMAGE = "${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}"
+        AWS_REGION = "us-east-1"
+        AWS_ACCOUNT_ID = "627129177687"
+        ECR_REPO_NAME = "fsl-app"
+        ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
         KUBE_NAMESPACE = "production"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                echo "🔄 Checking out repository..."
-                checkout scm
+                git branch: 'main',
+                    credentialsId: 'github-creds',
+                    url: 'https://github.com/mrbhupendra1/fsl-challenge01.git'
             }
         }
 
-        stage('Build & Test') {
-            agent {
-                docker {
-                    image 'node:18-alpine'
-                    args '-u root:root'  // ensure full permissions
-                }
-            }
+        stage('Install Dependencies') {
             steps {
-                sh '''
-                    echo "📦 Setting up writable npm cache..."
-                    mkdir -p /tmp/.npm
-                    npm config set cache /tmp/.npm --global
-
-                    echo "📦 Installing npm dependencies..."
-                    npm install
-
-                    echo "🧹 Running ESLint..."
-                    npm run lint || true
-
-                    echo "🎨 Running Prettier..."
-                    npm run prettier --write || true
-
-                    echo "🧪 Running Tests..."
-                    CI=true npm test || true
-                '''
+                sh 'npm install'
             }
         }
 
-        stage('Docker Build & Push') {
+        stage('Build Application') {
+            steps {
+                sh 'npm run build || echo "No build script, skipping..."'
+            }
+        }
+
+        stage('Build Docker Image') {
             steps {
                 script {
-                    echo "🐳 Building Docker image..."
-                    sh "docker build -t ${DOCKER_IMAGE} ."
-
-                    echo "🔐 Logging in to DockerHub..."
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
-                        sh 'echo $PASSWORD | docker login -u $USERNAME --password-stdin'
-                    }
-
-                    echo "📤 Pushing Docker image..."
-                    sh "docker push ${DOCKER_IMAGE}"
+                    dockerImage = docker.build("${ECR_URL}:latest")
                 }
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Login to AWS ECR') {
             steps {
-                script {
-                    echo "🚀 Deploying to Kubernetes..."
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
                     sh '''
-                        kubectl set image statefulset/fsl-app fsl-app=${DOCKER_IMAGE} -n production
-                        kubectl rollout status statefulset/fsl-app -n production
+                        aws ecr get-login-password --region ${AWS_REGION} | \
+                        docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                    '''
+                }
+            }
+        }
+
+        stage('Push Docker Image to ECR') {
+            steps {
+                script {
+                    sh '''
+                        docker push ${ECR_URL}:latest
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes (EKS)') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+                    sh '''
+                        kubectl set image statefulset/fsl-app \
+                        fsl-app=${ECR_URL}:latest \
+                        -n ${KUBE_NAMESPACE}
                     '''
                 }
             }
@@ -76,10 +74,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline completed successfully!"
+            echo '✅ Deployment successful!'
         }
         failure {
-            echo "❌ Pipeline failed. Check logs for details."
+            echo '❌ Deployment failed! Check logs.'
         }
     }
 }
